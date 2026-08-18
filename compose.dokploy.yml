@@ -161,8 +161,54 @@ services:
       - traefik.http.routers.bit-staging-web.tls.certresolver=letsencrypt
       - traefik.http.services.bit-staging-web.loadbalancer.server.port=80
 
+  # Drizzle Gateway: a browser UI onto the production database, same pattern as
+  # poppynz. Unlike `drizzle-kit studio` this is a self-hosted server with its
+  # own login, which is the only reason it is safe to give a public hostname —
+  # MASTERPASS is the sole thing between the internet and full read/write access
+  # to every row. Give it a generated secret, never a shared or reused one.
+  drizzle-gate:
+    image: ghcr.io/drizzle-team/gateway:latest
+    restart: always
+    # Deliberately NO `env_file`. Compose still reads `.env` to interpolate the
+    # two variables below, but pulling the whole file in would hand this
+    # container BETTER_AUTH_SECRET, DISCORD_CLIENT_SECRET and the database
+    # credentials — none of which it needs, since connections are configured
+    # through its own UI and persisted to the volume.
+    environment:
+      PORT: 3000
+      STORE_PATH: ${DRIZZLE_GATEWAY_STORE_PATH:-/app/data}
+      # `:?` makes compose REFUSE to start without a master password. The
+      # alternative is worse than a failed deploy: an unset value would bring up
+      # an unauthenticated database console on a public hostname.
+      MASTERPASS: ${DRIZZLE_GATEWAY_MASTERPASS:?set a master password before deploying the gateway}
+    expose:
+      - "3000"
+    networks:
+      - dokploy-network
+    volumes:
+      # Saved connections and gateway state. On a named volume so a redeploy
+      # does not drop every configured database.
+      - drizzle-gateway:${DRIZZLE_GATEWAY_STORE_PATH:-/app/data}
+    labels:
+      # HTTP basic auth in FRONT of the gateway, so an unauthenticated request
+      # never reaches the application at all. The gateway's own MASTERPASS stays
+      # in place behind it — the two are independent, and losing either one still
+      # leaves a lock on the door.
+      #
+      # The htpasswd entry is `user:bcrypt-hash`, supplied through the
+      # environment rather than written here. That keeps the hash out of the
+      # repository and sidesteps compose's `$` interpolation: a bcrypt hash is
+      # full of `$`, and inline it would have to be escaped as `$$`.
+      - traefik.enable=true
+      - traefik.http.routers.bit-staging-db.rule=Host(`drizzle.bit.0xspryon.work`)
+      - traefik.http.routers.bit-staging-db.entrypoints=websecure
+      - traefik.http.routers.bit-staging-db.tls.certresolver=letsencrypt
+      - traefik.http.routers.bit-staging-db.middlewares=bit-staging-db-auth
+      - traefik.http.middlewares.bit-staging-db-auth.basicauth.users=${DRIZZLE_GATEWAY_BASIC_AUTH:?set the htpasswd entry guarding the gateway}
+      - traefik.http.services.bit-staging-db.loadbalancer.server.port=3000
+
 volumes:
-  postgres_data:
+  drizzle-gateway:
   tei_data:
   reranker_data:
 
