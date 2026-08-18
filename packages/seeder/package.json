@@ -1,0 +1,25 @@
+{
+  "name": "@repo/seeder",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed:run": "bun ./src/run.ts",
+    "seed:status": "bun ./src/status.ts",
+    "seed:new": "bun ./src/new.ts"
+  },
+  "dependencies": {
+    "@repo/db": "*",
+    "@repo/env": "*",
+    "@repo/rag-core": "*",
+    "drizzle-orm": "^0.45.2",
+    "effect": "^3.21.2",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "*",
+    "@types/node": "^24.12.0",
+    "@types/pg": "^8.20.0",
+    "typescript": "^5.9.3"
+  }
+}

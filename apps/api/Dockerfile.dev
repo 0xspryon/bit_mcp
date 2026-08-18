@@ -1,0 +1,7 @@
+FROM oven/bun:1.3.14-alpine
+
+WORKDIR /usr/src/app
+
+EXPOSE 3000
+
+CMD ["sh", "-c", "bun install --frozen-lockfile && bun --cwd /usr/src/app/apps/api dev"]

@@ -1,0 +1,162 @@
+import { apiKey } from '@better-auth/api-key';
+import { betterAuth } from 'better-auth';
+import { createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { admin, openAPI } from 'better-auth/plugins';
+import { db, account, apikey, session, user, verification } from '@repo/db';
+import { environmentConfig } from '@repo/env';
+import { Effect } from 'effect';
+import { appAc, roles } from './auth-roles';
+
+// Module-scoped env reads keep the `auth` export synchronous.
+//
+// BETTER_AUTH_SECRET is REQUIRED and has no fallback: if it is omitted,
+// better-auth silently signs sessions with a publicly-known built-in constant,
+// which would let anyone forge an admin session and reach `record:['ingest']`.
+// Fail fast at startup instead. (`.env.example` ships a dev placeholder.)
+const secret = process.env.BETTER_AUTH_SECRET;
+if (secret === undefined || secret.trim().length === 0) {
+  throw new Error(
+    'BETTER_AUTH_SECRET is required (set it to a strong random value, e.g. `openssl rand -base64 32`). ' +
+    'Refusing to start: an unset secret makes better-auth fall back to a well-known default, ' +
+    'which makes session tokens forgeable.'
+  );
+}
+const baseURL = process.env.BETTER_AUTH_URL ?? 'http://localhost:3000';
+const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
+
+// Discord is the sole sign-in method in production. Email + password is enabled
+// only in dev/staging so tests and manual use can create an admin without a
+// Discord OAuth app. Resolve the environment through the shared, NORMALIZING +
+// VALIDATING parser (trims, lowercases, rejects anything outside dev|staging|
+// production at startup) so a casing/typo like `Production` or `prod` can never
+// silently leave email/password enabled in a production deployment.
+const isProduction = Effect.runSync(environmentConfig) === 'production';
+
+// API-key rate-limit tiers (per 60s window). `default` is what every caller
+// gets; `admin` is granted server-side by the api-key create hook below. The
+// rate-limit fields on the create endpoint are server-only (better-auth rejects
+// them on client requests), so a caller cannot self-assign a higher tier by
+// passing rateLimitMax; the only knob that varies the applied limit per request
+// is `configId`, and the hook forces that from the session role.
+const API_KEY_USER_TIER_MAX = 20;
+const API_KEY_ADMIN_TIER_MAX = 100;
+const API_KEY_RATE_WINDOW_MS = 60_000;
+
+export const auth = betterAuth({
+  appName: 'bit',
+  secret,
+  baseURL,
+  // Allows Discord OAuth callback URLs to point back at the calling UI/MCP app.
+  trustedOrigins,
+  // Dev/staging only: lets tests/manual use create an admin without a Discord
+  // app. Disabled in production (Discord-only). No email delivery is wired, so
+  // verification MUST stay off — there is no way to deliver a verification mail.
+  emailAndPassword: {
+    enabled: !isProduction,
+    requireEmailVerification: false
+  },
+  socialProviders: {
+    discord: {
+      clientId: process.env.DISCORD_CLIENT_ID ?? '',
+      clientSecret: process.env.DISCORD_CLIENT_SECRET ?? '',
+      // Request username + email from Discord.
+      scope: ['identify', 'email'],
+      // Store the Discord username in `user.name` and the email (falling back to
+      // a synthetic `${id}@discord.invalid` when Discord returns none) so both
+      // fields are always populated for a future dashboard.
+      mapProfileToUser: (profile) => ({
+        name: profile.global_name ?? profile.username,
+        email: profile.email ?? `${profile.id}@discord.invalid`
+      })
+    }
+  },
+  // First user created on a fresh install becomes `admin`; everyone after is a
+  // plain `user`. The `before` hook runs prior to the insert, so an empty `user`
+  // table means this is the very first account. A benign race between two
+  // simultaneous first signups is acceptable — a simple emptiness check is fine.
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (userData) => {
+          const existing = await db.select({ id: user.id }).from(user).limit(1);
+          const role = existing.length === 0 ? 'admin' : userData.role ?? 'user';
+          return { data: { ...userData, role } };
+        }
+      }
+    }
+  },
+  plugins: [
+    admin({
+      ac: appAc,
+      roles,
+      // Fallback if the create hook above does not set a role; the hook always
+      // does, but keep the plugin default aligned with the non-first-user case.
+      defaultRole: 'user',
+      adminRoles: ['admin']
+    }),
+    // Lets an `x-api-key` header resolve to a session (used by the MCP doorway).
+    // Two named configurations define the per-role rate-limit tiers; the create
+    // hook below forces which one applies from the caller's session role.
+    // `enableSessionForAPIKeys` (per config) is REQUIRED for the MCP doorway:
+    // it lets an `x-api-key` header resolve to a session via
+    // `auth.api.getSession`, carrying the key owner's role so
+    // `requirePermissions` still gates each tool.
+    apiKey([
+      {
+        configId: 'default',
+        enableSessionForAPIKeys: true,
+        rateLimit: {
+          enabled: true,
+          timeWindow: API_KEY_RATE_WINDOW_MS,
+          maxRequests: API_KEY_USER_TIER_MAX
+        }
+      },
+      {
+        configId: 'admin',
+        enableSessionForAPIKeys: true,
+        rateLimit: {
+          enabled: true,
+          timeWindow: API_KEY_RATE_WINDOW_MS,
+          maxRequests: API_KEY_ADMIN_TIER_MAX
+        }
+      }
+    ]),
+    openAPI()
+  ],
+  // Force the api-key rate-limit tier from the authenticated session's role so a
+  // caller cannot self-assign a higher limit. `rateLimitMax`/`rateLimitTimeWindow`
+  // /`rateLimitEnabled` are server-only on `/api-key/create` (better-auth rejects
+  // them on client requests), so we cannot rewrite them in the body. Instead we
+  // force `configId` — the one rate-limit-selecting field that IS client-facing —
+  // to the role's tier, overriding any caller-supplied value.
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== '/api-key/create') {
+        return;
+      }
+      const authSession = await getSessionFromCtx<{ role?: string | null }>(ctx, {
+        disableCookieCache: true
+      });
+      const isAdmin = authSession?.user.role === 'admin';
+      return {
+        context: {
+          body: {
+            ...ctx.body,
+            configId: isAdmin ? 'admin' : 'default'
+          }
+        }
+      };
+    })
+  },
+  database: drizzleAdapter(db, {
+    provider: 'pg',
+    // Our better-auth tables live in the `bit` pgSchema; map each model name to
+    // its drizzle table so better-auth reads/writes the existing tables instead
+    // of trying to auto-resolve differently-named ones.
+    schema: { user, session, account, verification, apikey }
+  })
+});

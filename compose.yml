@@ -1,0 +1,179 @@
+name: "bit_dev"
+
+services:
+  api:
+    container_name: bit-api
+    build:
+      context: .
+      dockerfile: ./apps/api/Dockerfile.dev
+    restart: unless-stopped
+    working_dir: /usr/src/app
+    command: sh -c "bun install --frozen-lockfile && bun --cwd /usr/src/app/apps/api dev"
+    env_file: "./.env"
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
+      EMBEDDING_ENDPOINT: http://embeddings:80
+      RERANK_ENDPOINT: http://reranker:80
+    volumes:
+      - .:/usr/src/app
+      - bun_node_modules:/usr/src/app/node_modules
+    networks:
+      - bit-net
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embeddings:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      seeds:
+        condition: service_completed_successfully
+
+  migrations:
+    container_name: bit-migrations
+    build:
+      context: .
+      dockerfile: ./Dockerfile.migrations.dev
+    restart: "no"
+    working_dir: /usr/src/app
+    env_file: "./.env"
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
+    volumes:
+      - .:/usr/src/app
+      - bun_node_modules:/usr/src/app/node_modules
+    networks:
+      - bit-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seeds:
+    container_name: bit-seeds
+    build:
+      context: .
+      dockerfile: ./Dockerfile.migrations.dev
+    restart: "no"
+    working_dir: /usr/src/app
+    command: sh -c "bun install --frozen-lockfile && sh /usr/src/app/scripts/run-seeds.sh"
+    env_file: "./.env"
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
+      EMBEDDING_ENDPOINT: http://embeddings:80
+      RERANK_ENDPOINT: http://reranker:80
+    volumes:
+      - .:/usr/src/app
+      - bun_node_modules:/usr/src/app/node_modules
+    networks:
+      - bit-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embeddings:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+  postgres:
+    container_name: bit-postgres
+    image: pgvector/pgvector:pg17
+    restart: always
+    command:
+      - postgres
+      - -c
+      - max_connections=1000
+      - -c
+      - listen_addresses=*
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASS}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bit-net
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # HuggingFace text-embeddings-inference — bge-m3 dense (1024). CPU image; for
+  # GPU swap to the cuda tag. Model weights cache into the tei_data volume.
+  embeddings:
+    container_name: bit-embeddings
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    restart: unless-stopped
+    # Small batch/concurrency caps keep CPU warm-up memory well under the
+    # per-container cgroup limit (the 16384-token default OOM-kills on load).
+    command:
+      - "--model-id"
+      - "BAAI/bge-m3"
+      - "--port"
+      - "80"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-concurrent-requests"
+      - "32"
+      - "--auto-truncate"
+    environment:
+      - HF_HOME=/data
+    volumes:
+      - tei_data:/data
+    networks:
+      - bit-net
+    ports:
+      - "127.0.0.1:8085:80"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
+  # Cross-encoder reranker — bge-reranker-v2-m3.
+  reranker:
+    container_name: bit-reranker
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    restart: unless-stopped
+    command:
+      - "--model-id"
+      - "BAAI/bge-reranker-v2-m3"
+      - "--port"
+      - "80"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-concurrent-requests"
+      - "32"
+      - "--auto-truncate"
+    environment:
+      - HF_HOME=/data
+    volumes:
+      - reranker_data:/data
+    networks:
+      - bit-net
+    ports:
+      - "127.0.0.1:8086:80"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  bun_node_modules:
+  postgres_data:
+  tei_data:
+  reranker_data:
+
+networks:
+  bit-net:
+    name: bit-net
+    driver: bridge

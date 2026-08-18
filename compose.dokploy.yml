@@ -1,0 +1,153 @@
+name: bit-staging
+
+x-app-env: &app-env
+  NODE_ENV: production
+  ENVIRONMENT: staging
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: always
+    env_file: .env
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASS}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    restart: unless-stopped
+    command:
+      - '--model-id'
+      - 'BAAI/bge-m3'
+      - '--port'
+      - '80'
+      - '--max-batch-tokens'
+      - '2048'
+      - '--max-concurrent-requests'
+      - '32'
+      - '--auto-truncate'
+    environment:
+      - HF_HOME=/data
+    volumes:
+      - tei_data:/data
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:80/health']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    restart: unless-stopped
+    command:
+      - '--model-id'
+      - 'BAAI/bge-reranker-v2-m3'
+      - '--port'
+      - '80'
+      - '--max-batch-tokens'
+      - '2048'
+      - '--max-concurrent-requests'
+      - '32'
+      - '--auto-truncate'
+    environment:
+      - HF_HOME=/data
+    volumes:
+      - reranker_data:/data
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:80/health']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  migrations:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.migrations.production
+    restart: 'no'
+    env_file: .env
+    environment:
+      <<: *app-env
+    networks:
+      - dokploy-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seeds:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.seeds.production
+    restart: 'no'
+    env_file: .env
+    environment:
+      <<: *app-env
+      EMBEDDING_ENDPOINT: http://embeddings:80
+      RERANK_ENDPOINT: http://reranker:80
+    networks:
+      - dokploy-network
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      embeddings:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: ./apps/api/Dockerfile.production
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *app-env
+      EMBEDDING_ENDPOINT: http://embeddings:80
+      RERANK_ENDPOINT: http://reranker:80
+    expose:
+      - '3000'
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/health || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.bit-staging-api.rule=Host(`staging.bit.local`)
+      - traefik.http.routers.bit-staging-api.entrypoints=websecure
+      - traefik.http.routers.bit-staging-api.tls.certresolver=letsencrypt
+      - traefik.http.services.bit-staging-api.loadbalancer.server.port=3000
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      seeds:
+        condition: service_completed_successfully
+      embeddings:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  tei_data:
+  reranker_data:
+
+networks:
+  dokploy-network:
+    external: true

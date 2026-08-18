@@ -1,0 +1,5 @@
+FROM oven/bun:1.3.14-alpine
+
+WORKDIR /usr/src/app
+
+CMD ["sh", "-c", "bun install --frozen-lockfile && sh /usr/src/app/scripts/run-migrations.sh"]
