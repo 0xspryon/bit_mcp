@@ -110,6 +110,7 @@ export const auth = betterAuth({
       {
         configId: 'default',
         enableSessionForAPIKeys: true,
+        defaultPrefix: 'bit_',
         rateLimit: {
           enabled: true,
           timeWindow: API_KEY_RATE_WINDOW_MS,

@@ -118,13 +118,27 @@ export function formatCalls(key: Pick<ApiKeyInfo, 'requestCount' | 'rateLimitMax
 		: `${key.requestCount} / ${key.rateLimitMax}`;
 }
 
-/** The MCP client config block, with the caller's key prefix filled in. */
+/**
+ * The opencode MCP config block, with the caller's key filled in.
+ *
+ * Shaped for `opencode.json` specifically: the server list lives under `mcp`
+ * (not the `mcpServers` key Claude Desktop and friends use), and a server
+ * reached over HTTP must declare `type: 'remote'` — without it opencode reads
+ * the entry as a local stdio server and looks for a command to spawn.
+ *
+ * `$schema` is included so editors offer completion and validation on the file.
+ * `enabled` is optional, and stated anyway: it is the switch a user reaches for
+ * to park the server without deleting their key.
+ */
 export function mcpClientConfig(keyDisplay: string, origin: string): string {
 	return JSON.stringify(
 		{
-			mcpServers: {
+			$schema: 'https://opencode.ai/config.json',
+			mcp: {
 				bit: {
+					type: 'remote',
 					url: `${origin}/api/v1/mcp`,
+					enabled: true,
 					headers: { 'x-api-key': keyDisplay }
 				}
 			}

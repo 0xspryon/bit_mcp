@@ -343,28 +343,32 @@
 						class="mb-4 flex items-center gap-3 font-mono text-[13px] font-semibold tracking-[1.5px]
 							text-ink"
 					>
-						<i class="bit-marker"></i>MCP_CLIENT_CONFIG
+						<i class="bit-marker"></i>OPENCODE_CONFIG
 					</div>
 					<div class="border border-hairline">
 						<div
 							class="flex items-center justify-between gap-4 border-b border-hairline px-4 py-[11px]"
 						>
 							<span class="font-mono text-[10px] tracking-[2px] text-meta">
-								HEADER: x-api-key
+								FILE: opencode.json
 							</span>
 							<span class="flex items-center gap-3">
 								<span class="hidden font-mono text-[10px] tracking-[2px] text-meta lg:inline">
 									JSON
 								</span>
-								<CopyButton value={configJson} label="MCP client config" />
+								<CopyButton value={configJson} label="opencode config" />
 							</span>
 						</div>
 						<div class="overflow-auto bg-code-bg">
 							<pre class="m-0 px-4 py-4 font-mono text-xs leading-[1.75] text-ink">{configJson}</pre>
 						</div>
 					</div>
+					<p class="mt-3 font-mono text-[10px] leading-[1.7] tracking-[0.5px] text-faint">
+						Goes in <span class="text-muted">opencode.json</span> at your project root, or
+						<span class="text-muted">~/.config/opencode/opencode.json</span> to reach every project.
+					</p>
 					{#if !secret}
-						<p class="mt-3 font-mono text-[10px] leading-[1.7] tracking-[0.5px] text-faint">
+						<p class="mt-2 font-mono text-[10px] leading-[1.7] tracking-[0.5px] text-faint">
 							Your secret is not recoverable, so the config carries a placeholder — replace
 							&lt;YOUR_API_KEY&gt; with the key you saved, or refresh to mint a new one.
 						</p>
