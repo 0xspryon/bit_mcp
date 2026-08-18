@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# Production image for the web SPA: bun builds the static bundle, caddy serves
+# it. Build context is the repo root:
+#   docker build -f apps/web/Dockerfile.production .
+
+ARG BUN_VERSION=1.3.14
+ARG CADDY_VERSION=2-alpine
+
+FROM oven/bun:${BUN_VERSION}-alpine AS base
+WORKDIR /usr/src/app
+
+# Manifest-only layer so source edits don't invalidate the install cache.
+FROM base AS deps
+COPY package.json bun.lock turbo.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/docs/package.json apps/docs/
+COPY apps/web/package.json apps/web/
+COPY packages/db/package.json packages/db/
+COPY packages/env/package.json packages/env/
+COPY packages/rag-core/package.json packages/rag-core/
+COPY packages/seeder/package.json packages/seeder/
+COPY packages/eslint-config/package.json packages/eslint-config/
+COPY packages/typescript-config/package.json packages/typescript-config/
+COPY packages/ui/package.json packages/ui/
+RUN bun install --frozen-lockfile
+
+FROM deps AS build
+COPY . .
+ENV NODE_ENV=production
+# The web app imports `api/hc` for its typed RPC client, which resolves to the
+# api package's compiled `dist/`. That build must run first — the two commands
+# are the `dependsOn: ["^build"]` edge in turbo.json, spelled out explicitly so
+# the image does not depend on the turbo daemon or its cache.
+RUN bun run --filter api build
+RUN bun run --filter web build
+
+# The runtime carries no bun, no node_modules, and no source — just Caddy and
+# roughly 2 MB of fingerprinted static files.
+FROM caddy:${CADDY_VERSION} AS runtime
+COPY apps/web/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /usr/src/app/apps/web/build /srv
+EXPOSE 80

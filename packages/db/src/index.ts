@@ -1,4 +1,4 @@
-export { db, closePlainPool } from './db';
+export { db, closePlainPool, hasEnabledApiKey } from './db';
 export * from './effect-db';
 export * from './schema';
 export * from './repos/record-repo';

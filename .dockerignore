@@ -7,6 +7,8 @@ dist
 **/dist
 .svelte-kit
 **/.svelte-kit
+# The SPA bundle is produced inside the image; a host copy would be stale.
+apps/web/build
 coverage
 **/coverage
 postgres_data
@@ -16,3 +18,8 @@ reranker_data
 .env
 .env.*
 !.env.example
+
+# Incremental compiler caches describe the HOST filesystem; copied into a
+# build they make tsc skip emitting output it thinks already exists.
+*.tsbuildinfo
+**/*.tsbuildinfo

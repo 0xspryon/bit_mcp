@@ -1,0 +1,75 @@
+# Caddy config for the static SPA bundle produced by `adapter-static`.
+#
+# This server sits BEHIND Dokploy's Traefik, which owns the public hostname and
+# terminates TLS. Caddy therefore speaks plain HTTP on :80 inside the compose
+# network and never negotiates a certificate of its own.
+{
+	# Traefik is the only thing that talks to this server; Caddy's own ACME
+	# machinery would race it for the hostname and fail, so switch it off.
+	auto_https off
+	# The admin API listens on :2019 by default. Nothing in this image uses it,
+	# and it is unauthenticated on the compose network — so close it.
+	admin off
+	# Traefik appends the real client IP to X-Forwarded-For; without this the
+	# access log records the proxy's address for every request.
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	root * /srv
+
+	log {
+		output stdout
+		format console
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	# Liveness for the compose healthcheck. Answered before any file lookup so a
+	# broken bundle still reports honestly on whether the server itself is up.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# The api answers `/api/*` on this same origin, routed there by Traefik before
+	# a request ever reaches Caddy. If one arrives here anyway the routing is
+	# broken, and 404 is the honest answer. Letting it fall through to the SPA
+	# handler below would return the HTML shell with a 200, which the browser
+	# client then feeds to `res.json()` — the failure surfaces as a null-property
+	# TypeError deep inside a page instead of a legible network error.
+	handle /api/* {
+		respond 404
+	}
+
+	# Fingerprinted bundles: the filename changes whenever the bytes do, so they
+	# can be cached forever. Deliberately NOT under the SPA fallback below — a
+	# missing chunk must 404 rather than return HTML that the browser would try
+	# to parse as JavaScript, which fails with a confusing MIME type error.
+	handle /_app/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server {
+			precompressed br gzip
+		}
+	}
+
+	handle {
+		# The shell carries no hash, so it must be revalidated on every load.
+		# Cache it and a deploy would keep serving the previous build's asset
+		# references until the browser happened to expire them.
+		header Cache-Control "no-cache"
+
+		# Deep links (`/admin/users`, `/connect`) have no file on disk. Serve the
+		# shell and let the client router resolve the path.
+		try_files {path} /index.html
+		file_server {
+			precompressed br gzip
+		}
+	}
+}

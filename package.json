@@ -12,7 +12,8 @@
     "db:migrate": "bun --filter @repo/db db:migrate",
     "seed:run": "bun --filter @repo/seeder seed:run",
     "compose:up": "docker compose up -d",
-    "compose:down": "docker compose down"
+    "compose:down": "docker compose down",
+    "mcp:client": "bunx @modelcontextprotocol/inspector --server-url http://localhost:3000/api/v1/mcp --transport http --header 'x-api-key: $BIT_API_KEY'"
   },
   "devDependencies": {
     "prettier": "^3.8.1",

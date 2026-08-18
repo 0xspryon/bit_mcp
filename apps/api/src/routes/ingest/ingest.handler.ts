@@ -25,7 +25,7 @@ export const ingestRouteProgram = (c: HonoContext<HonoEnv>, headers: Headers) =>
     const authenticated = yield* authenticate(headers);
     // HTTP is admin-only: gated on the admin `management` permission (ingestion
     // is admin-only anyway; this also keeps every HTTP route behind one gate).
-    yield* requirePermissions(headers, { management: ['access'] })(authenticated);
+    yield* requirePermissions({ management: ['access'] })(authenticated);
     const ingest = yield* IngestService;
     const result = yield* ingest.ingest(body);
     return { id: result.id, deduped: result.deduped, status: result.status };

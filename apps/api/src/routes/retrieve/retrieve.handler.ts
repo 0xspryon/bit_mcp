@@ -25,7 +25,7 @@ export const retrieveRouteProgram = (c: HonoContext<HonoEnv>, headers: Headers) 
     const authenticated = yield* authenticate(headers);
     // HTTP is the admin/batch doorway: gated on the admin-only `management`
     // permission. Non-agent retrieval for users goes through the MCP doorway.
-    yield* requirePermissions(headers, { management: ['access'] })(authenticated);
+    yield* requirePermissions({ management: ['access'] })(authenticated);
     const retriever = yield* RetrieverService;
     // `{ chunks, diagnostics }` — the diagnostics report each retrieval leg's
     // candidate count against what it was asked for, so a caller can tell a

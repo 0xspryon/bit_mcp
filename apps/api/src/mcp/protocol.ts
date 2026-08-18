@@ -16,6 +16,14 @@ export const PROTOCOL_VERSION = '2026-07-28' as const;
 /** Advertised in `server/discover` and echoed in the `-32022` error data. */
 export const SUPPORTED_VERSIONS = [PROTOCOL_VERSION] as const;
 
+/**
+ * REMOVE BY DECEMBER 2026 — see the `initialize` arm in `handle-rpc.ts`.
+ *
+ * The revision shipping clients still open with. Deliberately absent from
+ * {@link SUPPORTED_VERSIONS}: we answer its handshake, we do not implement it.
+ */
+export const LEGACY_HANDSHAKE_VERSION = '2025-11-25' as const;
+
 /** Server identity (self-reported; never used for security decisions). */
 export const SERVER_NAME = 'bit' as const;
 export const SERVER_VERSION = '0.1.0' as const;

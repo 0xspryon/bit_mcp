@@ -18,7 +18,7 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,15 +27,15 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
     restart: unless-stopped
     command:
-      - '--model-id'
-      - 'BAAI/bge-m3'
-      - '--port'
-      - '80'
-      - '--max-batch-tokens'
-      - '2048'
-      - '--max-concurrent-requests'
-      - '32'
-      - '--auto-truncate'
+      - "--model-id"
+      - "BAAI/bge-m3"
+      - "--port"
+      - "80"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-concurrent-requests"
+      - "32"
+      - "--auto-truncate"
     environment:
       - HF_HOME=/data
     volumes:
@@ -43,7 +43,7 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:80/health']
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -53,15 +53,15 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
     restart: unless-stopped
     command:
-      - '--model-id'
-      - 'BAAI/bge-reranker-v2-m3'
-      - '--port'
-      - '80'
-      - '--max-batch-tokens'
-      - '2048'
-      - '--max-concurrent-requests'
-      - '32'
-      - '--auto-truncate'
+      - "--model-id"
+      - "BAAI/bge-reranker-v2-m3"
+      - "--port"
+      - "80"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-concurrent-requests"
+      - "32"
+      - "--auto-truncate"
     environment:
       - HF_HOME=/data
     volumes:
@@ -69,7 +69,7 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:80/health']
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -79,7 +79,7 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile.migrations.production
-    restart: 'no'
+    restart: "no"
     env_file: .env
     environment:
       <<: *app-env
@@ -93,7 +93,7 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile.seeds.production
-    restart: 'no'
+    restart: "no"
     env_file: .env
     environment:
       <<: *app-env
@@ -118,18 +118,30 @@ services:
       EMBEDDING_ENDPOINT: http://embeddings:80
       RERANK_ENDPOINT: http://reranker:80
     expose:
-      - '3000'
+      - "3000"
     networks:
       - dokploy-network
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/health || exit 1']
+      test:
+        ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/v1/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
     labels:
+      # The api and the SPA share ONE public origin, and that is load-bearing
+      # rather than tidy: the browser client calls relative `/api/v1/*` URLs,
+      # and better-auth issues first-party session cookies plus post-login
+      # redirects to `/connect` and `/admin/users` — SPA routes. Split them
+      # across two hostnames and every one of those breaks at once.
+      #
+      # Traefik orders routers by descending priority, and defaults priority to
+      # the rule's length, which already favours this router over the SPA's bare
+      # Host rule. Both are pinned explicitly so the split never turns on how
+      # long a hostname happens to be.
       - traefik.enable=true
-      - traefik.http.routers.bit-staging-api.rule=Host(`staging.bit.local`)
+      - traefik.http.routers.bit-staging-api.rule=Host(`bit.0xspryon.work`) && PathPrefix(`/api`)
+      - traefik.http.routers.bit-staging-api.priority=100
       - traefik.http.routers.bit-staging-api.entrypoints=websecure
       - traefik.http.routers.bit-staging-api.tls.certresolver=letsencrypt
       - traefik.http.services.bit-staging-api.loadbalancer.server.port=3000
@@ -142,6 +154,33 @@ services:
         condition: service_healthy
       reranker:
         condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile.production
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      # Catch-all for the origin: everything Traefik did not match against the
+      # api's `/api` prefix above is an SPA route and resolves to the shell.
+      # No `env_file` and no runtime config — the bundle is static bytes, fixed
+      # at build time.
+      - traefik.enable=true
+      - traefik.http.routers.bit-staging-web.rule=Host(`bit.0xspryon.work`)
+      - traefik.http.routers.bit-staging-web.priority=1
+      - traefik.http.routers.bit-staging-web.entrypoints=websecure
+      - traefik.http.routers.bit-staging-web.tls.certresolver=letsencrypt
+      - traefik.http.services.bit-staging-web.loadbalancer.server.port=80
 
 volumes:
   postgres_data:

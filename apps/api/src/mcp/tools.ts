@@ -15,7 +15,7 @@ import {
 } from '../lib/effect-auth';
 
 /**
- * The two tools this doorway exposes, mirroring the HTTP `/retrieve` and
+ * The two tools this doorway exposes, mirroring the HTTP `/api/v1/retrieve` and
  * `/ingest` payloads over the SAME rag-core services. Nothing in
  * `@repo/rag-core` changes: the tool programs are the identical validate ->
  * authenticate -> authorize -> service pipeline the HTTP handlers run.
@@ -79,7 +79,7 @@ export type ToolRunner = (
  */
 const retrieveRunner: ToolRunner = (args, headers) =>
   authenticate(headers).pipe(
-    Effect.flatMap(requirePermissions(headers, { record: ['read'] })),
+    Effect.flatMap(requirePermissions({ record: ['read'] })),
     Effect.flatMap(() => RetrieverService),
     // Resolves `{ chunks, diagnostics }` and both are handed to the client
     // verbatim. `diagnostics.semantic_search_degraded` tells an agent that the
@@ -96,7 +96,7 @@ const retrieveRunner: ToolRunner = (args, headers) =>
  */
 const ingestRunner: ToolRunner = (args, headers) =>
   authenticate(headers).pipe(
-    Effect.flatMap(requirePermissions(headers, { record: ['ingest'] })),
+    Effect.flatMap(requirePermissions({ record: ['ingest'] })),
     Effect.flatMap(() => IngestService),
     Effect.flatMap((ingest) => ingest.ingest(args)),
     Effect.map((result) => ({ id: result.id, deduped: result.deduped, status: result.status }))

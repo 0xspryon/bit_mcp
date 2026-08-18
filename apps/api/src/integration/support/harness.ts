@@ -130,7 +130,7 @@ export const buildIntegrationRuntime = (opts: RuntimeOptions): AppRuntime => {
       Effect.succeed(
         hasSession ? { user: { id: currentUser.id }, session: { id: currentSession.id } } : null
       ),
-    userHasPermission: (_headers, requested) => Effect.succeed(grantsEvery(granted, requested))
+    userHasPermission: (_principal, requested) => Effect.succeed(grantsEvery(granted, requested))
   });
 
   // Real repos. Each `*Default` bakes in its own DrizzleLive; Effect's layer
@@ -146,7 +146,10 @@ export const buildIntegrationRuntime = (opts: RuntimeOptions): AppRuntime => {
     auth,
     makeUserRepoTest({
       findById: () => Effect.succeed(currentUser),
-      findByEmail: () => Effect.succeed(currentUser)
+      findByEmail: () => Effect.succeed(currentUser),
+      // The admin directory is exercised in its own tests; these doubles
+      // only need the member to satisfy the repo's shape.
+      listForAdmin: () => Effect.succeed([])
     }),
     makeSessionRepoTest({ findById: () => Effect.succeed(currentSession) }),
     dbInfra,

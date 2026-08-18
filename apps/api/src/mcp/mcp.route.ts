@@ -6,10 +6,12 @@ import { ErrorCode, err } from './protocol';
 /**
  * The MCP doorway: a stateless Streamable-HTTP `application/json` endpoint.
  *
- * `POST /` reads one JSON-RPC request object (or a batch array), builds a
+ * `POST /api/v1/mcp` reads one JSON-RPC request object (or a batch array), builds a
  * self-contained {@link McpContext} from the raw request headers + shared
  * runtime, and returns a single JSON response. There is NO SSE stream, NO
- * `Mcp-Session-Id`, and NO handshake — each POST stands entirely on its own.
+ * `Mcp-Session-Id`, and no handshake state — each POST stands entirely on its
+ * own, including the legacy `initialize` that `handleRpc` answers on sufferance
+ * for clients that cannot yet open without one.
  */
 /** Max JSON-RPC requests per batch. Bounds pre-auth fan-out (each item triggers
  * an auth lookup); combined with the route's body-size cap this keeps an

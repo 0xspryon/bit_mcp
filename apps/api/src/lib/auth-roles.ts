@@ -8,7 +8,7 @@ export const appAc = createAccessControl({
   // bit's own resource: ingesting vuln-knowledge records vs. reading them.
   record: ['ingest', 'read'],
   // Gate for the HTTP admin doorway. Granted to `admin` only; the doorway can
-  // `requirePermissions(headers, { management: ['access'] })` to lock itself down.
+  // `requirePermissions({ management: ['access'] })` to lock itself down.
   management: ['access']
 });
 

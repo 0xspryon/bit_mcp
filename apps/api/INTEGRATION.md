@@ -82,12 +82,12 @@ bun run --filter api eval:recall
 | 8 | transaction safety (source-FK violation rolls back) | fake |
 
 `src/integration/mcp.integration.test.ts` — MCP JSON-RPC doorway over
-`POST /mcp`: `server/discover`, `tools/list` (cache hints + deterministic order),
+`POST /api/v1/mcp`: `server/discover`, `tools/list` (cache hints + deterministic order),
 `bit_retrieve` `tools/call` (complete envelope, `kind:'methodology'` chunks),
 statelessness.
 
-`src/integration/http.integration.test.ts` — `/health`, `/retrieve` (happy + 400),
-`/ingest` (happy + dedup).
+`src/integration/http.integration.test.ts` — `/api/v1/health`, `/api/v1/retrieve`
+(happy + 400), `/api/v1/ingest` (happy + dedup).
 
 ### Auth in the e2e tests
 

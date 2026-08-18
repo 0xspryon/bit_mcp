@@ -3,20 +3,51 @@ import { httpPortConfig } from '@repo/env';
 import { Effect } from 'effect';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { createMiddleware } from 'hono/factory';
 import type { AppRuntime, HonoEnv } from './app-env';
-import { auth } from './lib/auth';
+import { API_BASE_PATH } from './hc';
+import { auth, baseURL, trustedOrigins } from './lib/auth';
 import { makeAppRuntime } from './managed-runtime';
-import { mcpRoute } from './mcp/mcp.route';
-import { healthRoute } from './routes/health/health';
-import { ingestRoute } from './routes/ingest/ingest';
-import { recordsRoute } from './routes/records/records';
-import { retrieveRoute } from './routes/retrieve/retrieve';
+import { appRoutes } from './routes/index';
 import { ensureInitialAppState } from './startup';
 
 /** Cap request bodies so an unauthenticated caller cannot force parsing of an
  * arbitrarily large payload before the auth check runs. 1 MiB comfortably fits
  * a single record ingest. */
 const MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Reject cross-site state changes on the versioned API.
+ *
+ * better-auth validates origins on its own `/api/auth/*` routes, but nothing
+ * covered `/api/v1/*` — so a destructive cookie-authenticated POST (notably
+ * `/me/key/refresh`) rested entirely on the session cookie's `SameSite=Lax`
+ * default being set elsewhere. This makes the protection explicit and local.
+ *
+ * Same-origin browser requests send `Origin` on unsafe methods; non-browser
+ * callers (agents on `x-api-key`) send none, and are unaffected — a cookie is
+ * what makes CSRF possible, and those requests carry none.
+ */
+const sameOriginOnly = createMiddleware(async (c, next) => {
+  const origin = c.req.header('origin');
+  if (origin) {
+    const allowed = [baseURL, ...trustedOrigins];
+    const isAllowed = allowed.some((candidate) => {
+      try {
+        return new URL(candidate).origin === new URL(origin).origin;
+      } catch {
+        return false;
+      }
+    });
+    if (!isAllowed) {
+      return c.json(
+        { error: { code: 'FORBIDDEN' as const, message: 'Cross-origin request rejected.' } },
+        403
+      );
+    }
+  }
+  await next();
+});
 
 const jsonBodyLimit = bodyLimit({
   maxSize: MAX_BODY_BYTES,
@@ -31,28 +62,27 @@ export const createApp = (runtime: AppRuntime) => {
   const app = new Hono<HonoEnv>()
     .use('*', async (c, next) => {
       c.set('runtime', runtime);
-      c.set('requestId', Bun.randomUUIDv7());
+      // `crypto.randomUUID` rather than `Bun.randomUUIDv7`: the Bun global is
+      // absent under vitest's Node workers, which threw on every request and
+      // made `createApp` untestable in the integration suites.
+      c.set('requestId', crypto.randomUUID());
       await next();
     })
 
-    // Body-size cap on the JSON write/read endpoints (defense-in-depth DoS).
-    .use('/ingest', jsonBodyLimit)
-    .use('/retrieve', jsonBodyLimit)
-    .use('/mcp', jsonBodyLimit)
-    .use('/records/:id/status', jsonBodyLimit)
+    // CSRF guard on every state-changing method under /api/v1.
+    .on(['POST', 'PATCH', 'PUT', 'DELETE'], `${API_BASE_PATH}/*`, sameOriginOnly)
 
-    // better-auth owns everything under /api/auth/*.
+    // Body-size cap on the JSON write/read endpoints (defense-in-depth DoS).
+    .use(`${API_BASE_PATH}/ingest`, jsonBodyLimit)
+    .use(`${API_BASE_PATH}/retrieve`, jsonBodyLimit)
+    .use(`${API_BASE_PATH}/mcp`, jsonBodyLimit)
+    .use(`${API_BASE_PATH}/records/:id/status`, jsonBodyLimit)
+
+    // better-auth owns everything under /api/auth/*, outside the versioned tree.
     .on(['POST', 'GET'], '/api/auth/*', (c) => auth.handler(c.req.raw))
 
-    // API routes mounted at root, per the public path contract.
-    .route('/', healthRoute)
-    .route('/', ingestRoute)
-    .route('/', retrieveRoute)
-    .route('/', recordsRoute)
-
-    // MCP doorway mounts here — a stateless JSON-RPC 2.0 endpoint over the same
-    // rag-core services as the HTTP routes above.
-    .route('/mcp', mcpRoute)
+    // Every other route — HTTP + the MCP doorway — lives under /api/v1.
+    .route(API_BASE_PATH, appRoutes)
 
     .onError((error, c) => {
       console.error(error);
@@ -65,7 +95,8 @@ export const createApp = (runtime: AppRuntime) => {
   return app;
 };
 
-/** Route types for a future Hono RPC client (`hc<AppType>`). */
+/** Route types for the whole app. RPC clients use `Client` from `./hc` instead,
+ * which is typed on the versioned sub-app alone. */
 export type AppType = ReturnType<typeof createApp>;
 
 // Guard the server bootstrap so importing this module under test neither runs

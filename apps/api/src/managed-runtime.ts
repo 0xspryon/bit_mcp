@@ -12,6 +12,7 @@ import {
 } from '@repo/rag-core';
 import { Layer, ManagedRuntime } from 'effect';
 import type { AppRuntime } from './app-env';
+import { ApiKeyServiceLive } from './lib/api-keys';
 import { AuthServiceLive } from './lib/effect-auth';
 
 /**
@@ -26,7 +27,8 @@ const infra = Layer.mergeAll(
   SessionRepoDefault,
   EmbeddingServiceLive,
   RerankServiceLive,
-  AuthServiceLive
+  AuthServiceLive,
+  ApiKeyServiceLive
 );
 
 /**

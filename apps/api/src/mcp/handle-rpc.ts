@@ -4,6 +4,7 @@ import {
   ErrorCode,
   err,
   type JsonRpcId,
+  LEGACY_HANDSHAKE_VERSION,
   type JsonRpcResponse,
   type JsonRpcResultResponse,
   ok,
@@ -153,8 +154,9 @@ const handleToolsCall = async (
 
 /**
  * Pure JSON-RPC 2.0 dispatcher implementing the `2026-07-28` methods. Takes a
- * single parsed request value + context; returns a single response. No
- * `initialize`, no session state, no `Mcp-Session-Id`.
+ * single parsed request value + context; returns a single response. No session
+ * state, no `Mcp-Session-Id` — and no `initialize` beyond the temporary
+ * compatibility arm marked for removal below.
  */
 export const handleRpc = async (
   request: unknown,
@@ -196,6 +198,26 @@ export const handleRpc = async (
   }
 
   switch (request.method) {
+    // ---- REMOVE BY DECEMBER 2026 --------------------------------------------
+    // A bridge, not a supported revision. `2026-07-28` deleted the handshake,
+    // but every client shipping today still opens with `initialize` and drops
+    // the connection on `-32601` (verified against Claude Code 2.1.205). We
+    // answer it so those clients reach the tools; `server/discover` below stays
+    // the real entry point and `SUPPORTED_VERSIONS` still advertises only
+    // `2026-07-28`. The extra `resultType` is ignored by such clients.
+    //
+    // Delete this arm, `LEGACY_HANDSHAKE_VERSION`, and their tests once Claude
+    // Code ships `2026-07-28`; if that has not happened by December 2026,
+    // recheck rather than let this quietly become permanent.
+    case 'initialize':
+      return ok(id, {
+        resultType: 'complete',
+        protocolVersion: LEGACY_HANDSHAKE_VERSION,
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+        instructions: discoverResult().instructions
+      });
+    // ---- end removal block ---------------------------------------------------
     case 'server/discover':
       return ok(id, discoverResult());
     case 'tools/list':

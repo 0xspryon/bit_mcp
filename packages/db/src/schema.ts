@@ -10,6 +10,7 @@ import {
   smallint,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   vector
 } from 'drizzle-orm/pg-core';
@@ -246,6 +247,17 @@ export const apikey = bit.table(
   (table) => [
     index('apikey_configId_idx').on(table.configId),
     index('apikey_referenceId_idx').on(table.referenceId),
-    index('apikey_key_idx').on(table.key)
+    index('apikey_key_idx').on(table.key),
+    // bit's contract is one usable key per account. The `/api-key/create`
+    // before-hook checks this first for a clean 409, but a check-then-insert
+    // cannot hold the invariant under concurrent requests — two simultaneous
+    // creates both read zero rows and both insert. Since the rate limit is
+    // enforced per key row, that would multiply an account's allowance, and
+    // the surplus key would not even be visible in the console (which shows
+    // one key). This index is what actually guarantees it; the hook only makes
+    // the common case a nice error.
+    uniqueIndex('apikey_one_enabled_per_reference_idx')
+      .on(table.referenceId)
+      .where(sql`${table.enabled}`)
   ]
 );

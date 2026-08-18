@@ -1,0 +1,181 @@
+/*
+ * bit console design system — the 0xspryon.work language.
+ * Source of truth: the `bit Console.dc.html` design hand-off.
+ *
+ * Every color, font and dimension used in markup must come from these tokens —
+ * never hard-code a hex or a magic number in a component.
+ *
+ * Three properties define the whole look, and none of them are negotiable per
+ * component: paper-and-ink neutrals with NO chromatic accent, hard corners
+ * (radius is 0 everywhere), and hairline rules instead of shadows. State that
+ * other systems carry in color — destructive, banned, active — is carried here
+ * by weight, case and ink fill instead. That is also why there is no DaisyUI:
+ * its radius, depth and status-color defaults would be overridden on every
+ * surface rather than used.
+ */
+@import 'tailwindcss';
+
+@theme {
+	/* ---- Surfaces ---- */
+	--color-paper: #f8f7f2; /* page + card ground */
+	--color-code-bg: #eceae1; /* code blocks, inline technical values */
+	--color-ink: #161616; /* type, fills, the one "solid" surface */
+	--color-ink-soft: #34332e; /* rules drawn ON an ink ground */
+
+	/* ---- Rules ---- */
+	--color-hairline: #e4e2d8; /* the default 1px rule between sections */
+	--color-rule: #cfcdc2; /* stronger rule — artboard/card outer edge */
+	--color-rule-soft: #e9e7de; /* body copy reversed onto an ink ground */
+
+	/* ---- Type ---- */
+	--color-body: #33322d; /* default body copy */
+	--color-muted: #55534c; /* secondary body copy, long-form prose */
+	--color-meta: #8a8880; /* mono labels, captions, JSON keys */
+	--color-faint: #b3b1a6; /* implementation notes, disabled controls */
+
+	/* ---- Families ----
+	 * Serif for headlines (its italic is the one expressive move in the
+	 * system), Sans for prose, Mono for EVERY technical value: labels,
+	 * buttons, ids, counts, endpoints, keys. */
+	--font-serif: 'IBM Plex Serif', georgia, serif;
+	--font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+	/* ---- Shape ----
+	 * Hard corners everywhere. Clearing Tailwind's radius scale means a stray
+	 * `rounded-*` in markup is a build-visible mistake, not a silent drift. */
+	--radius-xs: 0;
+	--radius-sm: 0;
+	--radius-md: 0;
+	--radius-lg: 0;
+	--radius-xl: 0;
+	--radius-2xl: 0;
+	--radius-3xl: 0;
+	--radius-4xl: 0;
+
+	/* ---- Page rhythm ----
+	 * The artboards use a 64px desktop gutter and 24px on the 390 companion. */
+	--spacing-gutter: 1.5rem;
+	--spacing-gutter-lg: 4rem;
+}
+
+@layer base {
+	body {
+		background-color: var(--color-paper);
+		color: var(--color-body);
+		font-family: var(--font-sans);
+		-webkit-font-smoothing: antialiased;
+	}
+
+	a {
+		color: var(--color-ink);
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+
+	a:hover {
+		color: var(--color-muted);
+	}
+
+	::selection {
+		background: var(--color-ink);
+		color: var(--color-paper);
+	}
+
+	/* Themed focus, never the browser default — the design has no accent to
+	 * ring with, so the ring is ink on paper. */
+	:focus-visible {
+		outline: 2px solid var(--color-ink);
+		outline-offset: 2px;
+	}
+}
+
+@layer components {
+	/* The uppercase mono label that titles every band, with its 9px ink square.
+	 * Used with a `<i class="bit-marker">` first child. */
+	.bit-label {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 2px;
+		color: var(--color-ink);
+	}
+
+	.bit-marker {
+		width: 9px;
+		height: 9px;
+		flex: none;
+		background: var(--color-ink);
+		display: inline-block;
+	}
+
+	/* Caption/meta text: the right-hand side of a band header, footers, notes. */
+	.bit-meta {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		letter-spacing: 1.5px;
+		color: var(--color-meta);
+	}
+
+	/* The one solid object on the page — primary actions only. */
+	.btn-ink {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.75rem;
+		background: var(--color-ink);
+		color: var(--color-paper);
+		font-family: var(--font-mono);
+		font-size: 12px;
+		font-weight: 700;
+		letter-spacing: 2px;
+		padding: 1.0625rem 1.75rem;
+		transition: opacity 120ms ease;
+	}
+
+	.btn-ink:hover:not(:disabled) {
+		opacity: 0.86;
+	}
+
+	/* Secondary/□ actions: hairline outline, ink type, no fill. */
+	.btn-hairline {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.625rem;
+		border: 1px solid var(--color-ink);
+		color: var(--color-ink);
+		font-family: var(--font-mono);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 2px;
+		padding: 0.625rem 1rem;
+		transition: background-color 120ms ease, color 120ms ease;
+	}
+
+	.btn-hairline:hover:not(:disabled) {
+		background: var(--color-ink);
+		color: var(--color-paper);
+	}
+
+	/* The BANNED chip. With no red in the palette, the state is carried by a
+	 * hatch fill instead of a color — the same trick the hand-off uses. */
+	.chip-banned {
+		border: 1px solid var(--color-rule);
+		color: var(--color-ink);
+		background-image: repeating-linear-gradient(
+			135deg,
+			var(--color-code-bg) 0 6px,
+			var(--color-paper) 6px 12px
+		);
+	}
+
+	.btn-ink:disabled,
+	.btn-hairline:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+}

@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import type { AppRuntime } from '../app-env';
+import { API_BASE_PATH } from '../hc';
 import { createApp } from '../index';
 import {
   buildIntegrationRuntime,
@@ -14,7 +15,7 @@ import {
 
 /**
  * MCP contract e2e: drive the stateless JSON-RPC doorway over the real HTTP
- * route (`createApp(runtime).request('/mcp', …)`) against a DB-backed runtime
+ * route (`createApp(runtime).request('/api/v1/mcp', …)`) against a DB-backed runtime
  * (fake embedder, real Record/Source repos). Auth is the test double granting
  * `record:['read','ingest']`.
  */
@@ -28,7 +29,7 @@ describe.skipIf(!dockerAvailable)('MCP doorway e2e', () => {
   let app: ReturnType<typeof createApp>;
 
   const postRpc = async (body: unknown, headers: Record<string, string> = {}) => {
-    const res = await app.request('/mcp', {
+    const res = await app.request(`${API_BASE_PATH}/mcp`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body)

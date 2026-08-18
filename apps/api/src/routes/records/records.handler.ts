@@ -82,7 +82,7 @@ const toRecordDto = (row: RecordReadRow, sources: readonly RecordSourceRow[]): R
 });
 
 /**
- * `GET /records/:id` — fetch a single record by id. Admin-only (HTTP is the
+ * `GET /api/v1/records/:id` — fetch a single record by id. Admin-only (HTTP is the
  * admin/curation doorway); returns the public {@link RecordDto}, any status,
  * INCLUDING soft-deleted records (`deletedAt` tells them apart). This path
  * deliberately does not filter on `deleted_at` — the retrieve/list paths do.
@@ -90,7 +90,7 @@ const toRecordDto = (row: RecordReadRow, sources: readonly RecordSourceRow[]): R
 export const recordByIdRouteProgram = (headers: Headers, id: string) =>
   Effect.gen(function* () {
     const authenticated = yield* authenticate(headers);
-    yield* requirePermissions(headers, { management: ['access'] })(authenticated);
+    yield* requirePermissions({ management: ['access'] })(authenticated);
     if (!UUID_RE.test(id)) {
       return yield* Effect.fail(new RecordNotFoundError({ id }));
     }
@@ -108,14 +108,14 @@ export const recordByIdRouteProgram = (headers: Headers, id: string) =>
   });
 
 /**
- * `PATCH /records/:id/status` — admin curation: promote (`staging`→`active`) or
+ * `PATCH /api/v1/records/:id/status` — admin curation: promote (`staging`→`active`) or
  * demote (`active`→`staging`) a record. Admin-only. Returns the updated
  * {@link RecordDto}.
  */
 export const updateRecordStatusRouteProgram = (headers: Headers, id: string, body: unknown) =>
   Effect.gen(function* () {
     const authenticated = yield* authenticate(headers);
-    yield* requirePermissions(headers, { management: ['access'] })(authenticated);
+    yield* requirePermissions({ management: ['access'] })(authenticated);
     if (!UUID_RE.test(id)) {
       return yield* Effect.fail(new RecordNotFoundError({ id }));
     }
@@ -134,13 +134,13 @@ export const updateRecordStatusRouteProgram = (headers: Headers, id: string, bod
   });
 
 /**
- * `GET /records?status=&limit=` — admin list of records by lifecycle status
+ * `GET /api/v1/records?status=&limit=` — admin list of records by lifecycle status
  * (defaults to `staging`, for the review queue). Admin-only.
  */
 export const listRecordsRouteProgram = (headers: Headers, query: unknown) =>
   Effect.gen(function* () {
     const authenticated = yield* authenticate(headers);
-    yield* requirePermissions(headers, { management: ['access'] })(authenticated);
+    yield* requirePermissions({ management: ['access'] })(authenticated);
     const { status, limit } = yield* validateListQuery(query);
     const repo = yield* RecordRepo;
     const rows = yield* repo

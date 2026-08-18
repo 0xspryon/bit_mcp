@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    // Park the incremental cache INSIDE the output directory. The base config
+    // turns on `incremental`, and with the default location (next to this file)
+    // the cache outlives a deleted `dist/`: tsc reads it, concludes everything
+    // is up to date, emits nothing, and exits 0. That silent no-op is invisible
+    // locally — where a stale `dist/` is usually still lying around — and fatal
+    // in a container build, where nothing downstream can resolve `api/hc`.
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "rootDir": "src",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": [],
+  "files": ["src/hc.ts"]
+}

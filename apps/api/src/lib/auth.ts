@@ -1,12 +1,13 @@
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth } from 'better-auth';
-import { createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { admin, openAPI } from 'better-auth/plugins';
-import { db, account, apikey, session, user, verification } from '@repo/db';
+import { db, account, apikey, hasEnabledApiKey, session, user, verification } from '@repo/db';
 import { environmentConfig } from '@repo/env';
 import { Effect } from 'effect';
 import { appAc, roles } from './auth-roles';
+import { resolveCallbackRedirect } from './post-auth';
 
 // Module-scoped env reads keep the `auth` export synchronous.
 //
@@ -22,8 +23,8 @@ if (secret === undefined || secret.trim().length === 0) {
     'which makes session tokens forgeable.'
   );
 }
-const baseURL = process.env.BETTER_AUTH_URL ?? 'http://localhost:3000';
-const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? '')
+export const baseURL = process.env.BETTER_AUTH_URL ?? 'http://localhost:3000';
+export const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? '')
   .split(',')
   .map((origin) => origin.trim())
   .filter((origin) => origin.length > 0);
@@ -141,6 +142,15 @@ export const auth = betterAuth({
       const authSession = await getSessionFromCtx<{ role?: string | null }>(ctx, {
         disableCookieCache: true
       });
+      // One key per account. better-auth happily mints a second, so reject it
+      // here — the UI's "refresh" path goes through /api/v1/me/key/refresh,
+      // which revokes the old key in the same step.
+      if (authSession?.user.id && (await hasEnabledApiKey(authSession.user.id))) {
+        throw new APIError('CONFLICT', {
+          code: 'API_KEY_ALREADY_EXISTS',
+          message: 'This account already holds an API key. Refresh or revoke it instead.'
+        });
+      }
       const isAdmin = authSession?.user.role === 'admin';
       return {
         context: {
@@ -150,6 +160,25 @@ export const auth = betterAuth({
           }
         }
       };
+    }),
+    // Send a freshly signed-in caller to the home their role actually has,
+    // instead of the single `callbackURL` the UI had to commit to before it
+    // knew who was signing in.
+    //
+    // The OAuth callback sets the session cookie (which populates
+    // `newSession`) BEFORE it throws its redirect, and an after-hook that
+    // throws an APIError replaces the returned response — so re-throwing
+    // `ctx.redirect` here swaps the Location while leaving the Set-Cookie
+    // headers, which are merged from the shared response headers, intact.
+    //
+    // Anything that is not a completed callback (an OAuth error redirect, any
+    // other route) falls through untouched.
+    after: createAuthMiddleware(async (ctx) => {
+      const destination = resolveCallbackRedirect(ctx.path, ctx.context.newSession);
+      if (destination === null) {
+        return;
+      }
+      throw ctx.redirect(new URL(destination, baseURL).toString());
     })
   },
   database: drizzleAdapter(db, {

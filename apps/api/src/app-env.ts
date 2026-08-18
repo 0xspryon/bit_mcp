@@ -7,6 +7,7 @@ import type {
 } from '@repo/rag-core';
 import type { ManagedRuntime } from 'effect';
 import type { Env, Handler } from 'hono';
+import type { ApiKeyService } from './lib/api-keys';
 import type { AuthService } from './lib/effect-auth';
 
 /**
@@ -21,6 +22,7 @@ export type AppServices =
   | EmbeddingService
   | RerankService
   | AuthService
+  | ApiKeyService
   | IngestService
   | RetrieverService;
 

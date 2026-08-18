@@ -16,6 +16,7 @@ import {
 import { Effect, Layer, ManagedRuntime, Option } from 'effect';
 import { describe, expect, it } from 'vitest';
 import type { AppRuntime } from '../app-env';
+import { makeApiKeyServiceTest } from '../lib/api-keys';
 import { makeAuthServiceTest, type Permissions } from '../lib/effect-auth';
 import { handleRpc, type McpContext } from './handle-rpc';
 import type { JsonRpcErrorResponse, JsonRpcResultResponse } from './protocol';
@@ -103,7 +104,7 @@ const makeTestRuntime = (
       Effect.succeed(
         hasSession ? { user: { id: currentUser.id }, session: { id: currentSession.id } } : null
       ),
-    userHasPermission: (_headers, requested) => Effect.succeed(grantsEvery(granted, requested))
+    userHasPermission: (_principal, requested) => Effect.succeed(grantsEvery(granted, requested))
   });
 
   const recordRepo = makeRecordRepoTest({
@@ -132,7 +133,10 @@ const makeTestRuntime = (
     auth,
     makeUserRepoTest({
       findById: () => Effect.succeed(currentUser),
-      findByEmail: () => Effect.succeed(currentUser)
+      findByEmail: () => Effect.succeed(currentUser),
+      // The admin directory is exercised in its own tests; these doubles
+      // only need the member to satisfy the repo's shape.
+      listForAdmin: () => Effect.succeed([])
     }),
     makeSessionRepoTest({ findById: () => Effect.succeed(currentSession) }),
     recordRepo,
@@ -140,7 +144,14 @@ const makeTestRuntime = (
     embedding,
     rerank,
     retriever,
-    ingest
+    ingest,
+    // The MCP doorway never touches api keys; the runtime just has to satisfy
+    // the full AppServices union.
+    makeApiKeyServiceTest({
+      list: () => Effect.succeed([]),
+      create: () => Effect.die('unused'),
+      delete: () => Effect.void
+    })
   );
 
   return ManagedRuntime.make(layer);
@@ -181,6 +192,38 @@ describe('handleRpc — server/discover', () => {
     expect(result.serverInfo).toEqual({ name: 'bit', version: '0.1.0' });
   });
 });
+
+// ---- REMOVE BY DECEMBER 2026 (with the `initialize` arm in handle-rpc.ts) ----
+describe('handleRpc — legacy initialize bridge', () => {
+  it('answers the pre-2026-07-28 handshake so shipping clients can connect', async () => {
+    const runtime = makeTestRuntime();
+    const response = await handleRpc(
+      {
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-11-25', clientInfo: { name: 'claude-code' } }
+      },
+      ctxFor(runtime)
+    );
+    const { result } = asResult(response);
+    // Echo the revision the client opened with, not the one we actually speak —
+    // it hangs up on a version it did not ask for.
+    expect(result.protocolVersion).toBe('2025-11-25');
+    expect(result.serverInfo).toEqual({ name: 'bit', version: '0.1.0' });
+  });
+
+  it('keeps the handshake out of the advertised revisions', async () => {
+    const runtime = makeTestRuntime();
+    const response = await handleRpc(
+      { jsonrpc: '2.0', id: 'd2', method: 'server/discover' },
+      ctxFor(runtime)
+    );
+    const { result } = asResult(response);
+    expect(result.supportedVersions).toEqual(['2026-07-28']);
+  });
+});
+// ---- end removal block ------------------------------------------------------
 
 describe('handleRpc — tools/list', () => {
   it('returns cache hints, deterministic order, and resultType complete', async () => {

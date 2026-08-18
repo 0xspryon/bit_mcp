@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import type { AppRuntime } from '../app-env';
+import { API_BASE_PATH } from '../hc';
 import { createApp } from '../index';
 import {
   buildIntegrationRuntime,
@@ -31,7 +32,7 @@ describe.skipIf(!dockerAvailable)('HTTP e2e', () => {
   let app: ReturnType<typeof createApp>;
 
   const post = (path: string, body: unknown) =>
-    app.request(path, {
+    app.request(`${API_BASE_PATH}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)
@@ -72,7 +73,7 @@ describe.skipIf(!dockerAvailable)('HTTP e2e', () => {
   });
 
   it('GET /health returns 200 and the expected shape', async () => {
-    const res = await app.request('/health');
+    const res = await app.request(`${API_BASE_PATH}/health`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; embeddingModel: string; embeddingDim: number };
     expect(body.ok).toBe(true);
