@@ -5,8 +5,6 @@ max_attempts="${MIGRATION_MAX_ATTEMPTS:-20}"
 retry_delay_seconds="${MIGRATION_RETRY_DELAY_SECONDS:-3}"
 attempt=1
 
-echo "DATABASE_URL=$DATABASE_URL"
-
 run_migrations() {
   printf 'Running bit db migrations\n'
   bun --filter @repo/db db:migrate
