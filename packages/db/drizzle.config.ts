@@ -2,6 +2,7 @@ import { defineConfig } from 'drizzle-kit';
 
 const url = process.env.DATABASE_URL ?? '';
 
+console.log({ url })
 export default defineConfig({
   out: './src/migrations',
   schema: './src/schema.ts',
