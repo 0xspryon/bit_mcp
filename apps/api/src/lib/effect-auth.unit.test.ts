@@ -1,8 +1,10 @@
 import { DBNotFoundError, makeSessionRepoTest, makeUserRepoTest, type Session, type User } from '@repo/db';
 import { Cause, Effect, Exit, Layer, Option } from 'effect';
 import { describe, expect, it } from 'vitest';
+import { APIError } from 'better-auth/api';
 import {
   authenticate,
+  isCredentialRejection,
   makeAuthServiceTest,
   requirePermissions,
   requireSessionRow,
@@ -89,6 +91,39 @@ const makeLayer = (
     })
   );
 };
+
+// The regression these guard: better-auth throws on a refused API key instead
+// of returning null, so every stale key was surfacing as an HTTP 500 and a
+// JSON-RPC -32603 ("Unable to verify authentication") rather than a 401.
+describe('isCredentialRejection', () => {
+  // The api-key plugin genuinely uses all three for a refused credential.
+  it.each([
+    ['UNAUTHORIZED', 'INVALID_API_KEY'],
+    ['FORBIDDEN', 'INVALID_API_KEY'],
+    ['NOT_FOUND', 'KEY_NOT_FOUND'],
+    ['UNAUTHORIZED', 'USER_BANNED']
+  ])('treats %s / %s as a refused credential', (status, code) => {
+    const error = APIError.from(status as 'UNAUTHORIZED', { code, message: 'refused' });
+    expect(isCredentialRejection(error)).toBe(true);
+  });
+
+  it('does NOT fold rate limiting into "unauthenticated"', () => {
+    // 429 says nothing about the key. Reporting it as unauthenticated would
+    // send the caller off to mint a replacement for a working credential.
+    const error = APIError.from('TOO_MANY_REQUESTS', { code: 'RATE_LIMITED', message: 'slow down' });
+    expect(isCredentialRejection(error)).toBe(false);
+  });
+
+  it('keeps provider failures distinct — a 5xx is not a bad key', () => {
+    const error = APIError.from('INTERNAL_SERVER_ERROR', { code: 'BOOM', message: 'provider down' });
+    expect(isCredentialRejection(error)).toBe(false);
+  });
+
+  it('keeps non-APIError throws distinct — a dropped connection is not a bad key', () => {
+    expect(isCredentialRejection(new Error('ECONNREFUSED'))).toBe(false);
+    expect(isCredentialRejection(null)).toBe(false);
+  });
+});
 
 describe('authenticate', () => {
   it('returns the session row for a cookie caller', async () => {

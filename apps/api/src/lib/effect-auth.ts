@@ -1,4 +1,5 @@
 import { type DbError, type Session, SessionRepo, type User, UserRepo } from '@repo/db';
+import { APIError } from 'better-auth/api';
 import { Context, Data, Effect, Layer, Option } from 'effect';
 import type { Context as HonoContext } from 'hono';
 import { auth } from './auth';
@@ -45,15 +46,15 @@ type SqlError = Exclude<DbError, { _tag: 'DBNotFoundError' }>;
 
 export class AuthProviderError extends Data.TaggedError('AuthProviderError')<{
   cause: unknown;
-}> {}
+}> { }
 
 export class AuthEntityLookupError extends Data.TaggedError('AuthEntityLookupError')<{
   cause: SqlError;
-}> {}
+}> { }
 
-export class UnauthorizedError extends Data.TaggedError('UnauthorizedError')<{}> {}
+export class UnauthorizedError extends Data.TaggedError('UnauthorizedError')<{}> { }
 
-export class ForbiddenError extends Data.TaggedError('ForbiddenError')<{}> {}
+export class ForbiddenError extends Data.TaggedError('ForbiddenError')<{}> { }
 
 export class AuthService extends Context.Tag('@api/lib/AuthService')<
   AuthService,
@@ -75,7 +76,31 @@ export class AuthService extends Context.Tag('@api/lib/AuthService')<
       permissions: Permissions
     ) => Effect.Effect<boolean, AuthProviderError>;
   }
->() {}
+>() { }
+
+/**
+ * Does this thrown value mean "the caller's credential was refused"?
+ *
+ * better-auth does NOT return `null` from `getSession` for a bad API key — the
+ * api-key plugin THROWS an `APIError`, and it uses several statuses for what is
+ * one condition (`INVALID_API_KEY` arrives as both `UNAUTHORIZED` and
+ * `FORBIDDEN`, a missing row as `NOT_FOUND`). Matching on the status class
+ * rather than an enumerated code list means a plugin update that adds a
+ * rejection reason does not silently start reporting 500s again.
+ *
+ * 429 is the deliberate exception: rate limiting is not a statement about the
+ * credential, and collapsing it into "unauthenticated" would send a caller off
+ * to re-mint a key that was never the problem. It stays a provider error.
+ *
+ * A 5xx, a network failure, or any non-`APIError` throw is a real provider
+ * failure and must keep its own identity — we could not determine anything, and
+ * reporting that as "unauthenticated" would be a lie in the dangerous direction.
+ */
+export const isCredentialRejection = (cause: unknown): boolean =>
+  cause instanceof APIError &&
+  cause.statusCode >= 400 &&
+  cause.statusCode < 500 &&
+  cause.statusCode !== 429;
 
 export const AuthServiceLive = Layer.succeed(AuthService, {
   getSession: (headers) =>
@@ -83,12 +108,23 @@ export const AuthServiceLive = Layer.succeed(AuthService, {
       try: async () => auth.api.getSession({ headers }),
       catch: (cause) => new AuthProviderError({ cause })
     }).pipe(
+      // A refused credential is the CALLER's error, not ours. Folding it back
+      // to `null` puts it on the same path as a request that carried no
+      // credential at all, which `authenticate` already turns into
+      // `UnauthorizedError` -> 401 / `40100`. Left as a raw provider failure it
+      // surfaced as an HTTP 500 and a JSON-RPC `-32603`, so every stale key on
+      // an agent read as the server being broken.
+      Effect.catchTag('AuthProviderError', (error) =>
+        isCredentialRejection(error.cause)
+          ? Effect.succeed(null)
+          : Effect.fail(error)
+      ),
       Effect.map((session) =>
         session
           ? {
-              user: { id: session.user.id },
-              session: { id: session.session.id }
-            }
+            user: { id: session.user.id },
+            session: { id: session.session.id }
+          }
           : null
       )
     ),
@@ -117,7 +153,7 @@ export const makeAuthServiceTest = (implementation: Context.Tag.Service<AuthServ
   Layer.succeed(AuthService, implementation);
 
 export const authenticate = (headers: Headers) =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const authService = yield* AuthService;
     const userRepo = yield* UserRepo;
     const sessionRepo = yield* SessionRepo;
@@ -169,23 +205,22 @@ export const requireSessionRow = (userAndSession: UserAndSession) =>
 
 export const requirePermissions =
   (permissions: Permissions) =>
-  (userAndSession: UserAndSession) =>
-    Effect.gen(function* () {
-      const authService = yield* AuthService;
-      const allowed = yield* authService.userHasPermission(
-        { userId: userAndSession.user.id, role: userAndSession.user.role },
-        permissions
-      );
-
-      if (!allowed) {
-        return yield* Effect.fail(new ForbiddenError());
-      }
-      const role = userAndSession.user.role;
-      if (role && !isSupportedRole(role)) {
-        return yield* Effect.fail(new ForbiddenError());
-      }
-      return userAndSession;
-    });
+    (userAndSession: UserAndSession) =>
+      Effect.gen(function*() {
+        const authService = yield* AuthService;
+        const allowed = yield* authService.userHasPermission(
+          { userId: userAndSession.user.id, role: userAndSession.user.role },
+          permissions
+        );
+        if (!allowed) {
+          return yield* Effect.fail(new ForbiddenError());
+        }
+        const role = userAndSession.user.role;
+        if (role && !isSupportedRole(role)) {
+          return yield* Effect.fail(new ForbiddenError());
+        }
+        return userAndSession;
+      });
 
 export type AuthError =
   | Effect.Effect.Error<ReturnType<typeof authenticate>>

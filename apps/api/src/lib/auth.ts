@@ -43,9 +43,9 @@ const isProduction = Effect.runSync(environmentConfig) === 'production';
 // them on client requests), so a caller cannot self-assign a higher tier by
 // passing rateLimitMax; the only knob that varies the applied limit per request
 // is `configId`, and the hook forces that from the session role.
-const API_KEY_USER_TIER_MAX = 20;
-const API_KEY_ADMIN_TIER_MAX = 100;
-const API_KEY_RATE_WINDOW_MS = 60_000;
+export const API_KEY_USER_TIER_MAX = 20;
+export const API_KEY_ADMIN_TIER_MAX = 100;
+export const API_KEY_RATE_WINDOW_MS = 60_000;
 
 export const auth = betterAuth({
   appName: 'bit',
@@ -100,40 +100,51 @@ export const auth = betterAuth({
       adminRoles: ['admin']
     }),
     // Lets an `x-api-key` header resolve to a session (used by the MCP doorway).
-    // Two named configurations define the per-role rate-limit tiers; the create
-    // hook below forces which one applies from the caller's session role.
-    // `enableSessionForAPIKeys` (per config) is REQUIRED for the MCP doorway:
-    // it lets an `x-api-key` header resolve to a session via
-    // `auth.api.getSession`, carrying the key owner's role so
-    // `requirePermissions` still gates each tool.
-    apiKey([
-      {
-        configId: 'default',
-        enableSessionForAPIKeys: true,
-        rateLimit: {
-          enabled: true,
-          timeWindow: API_KEY_RATE_WINDOW_MS,
-          maxRequests: API_KEY_USER_TIER_MAX
-        }
-      },
-      {
-        configId: 'admin',
-        enableSessionForAPIKeys: true,
-        rateLimit: {
-          enabled: true,
-          timeWindow: API_KEY_RATE_WINDOW_MS,
-          maxRequests: API_KEY_ADMIN_TIER_MAX
-        }
+    // `enableSessionForAPIKeys` is REQUIRED for that: it lets an `x-api-key`
+    // header resolve to a session via `auth.api.getSession`, carrying the key
+    // owner's role so `requirePermissions` still gates each tool.
+    //
+    // EXACTLY ONE configuration, deliberately. Tiering used to be two named
+    // configurations picked per role, which could never work: the plugin binds
+    // an inbound header to the FIRST configuration declaring it and validates
+    // against that one alone (`findApiKeyAndConfig` returns on first match,
+    // then passes `expectedConfigId: config.configId`). Both tiers listened on
+    // `x-api-key`, so every request was checked against `default` and every
+    // admin-tier key failed `configIdMatches` with a flat `INVALID_API_KEY`.
+    //
+    // The rate limit below is therefore a FLOOR, not the whole story:
+    // `ApiKeyService.create` sets `rateLimitMax` per key from the owner's role,
+    // which is what actually tiers an account. `configId` is left unset so the
+    // plugin skips the match check entirely, which also keeps keys minted under
+    // the old two-config scheme working.
+    // Passed as a bare object, not a one-element array: the array form demands a
+    // `configId` on every entry, and naming this one would re-introduce the
+    // exact comparison that broke admin keys. Unnamed, `expectedConfigId` is
+    // undefined and the plugin skips the check.
+    apiKey({
+      enableSessionForAPIKeys: true,
+      apiKeyHeaders: "x-api-key",
+      defaultPrefix: 'bit_',
+      rateLimit: {
+        enabled: true,
+        timeWindow: API_KEY_RATE_WINDOW_MS,
+        maxRequests: API_KEY_USER_TIER_MAX
       }
-    ]),
+    }),
     openAPI()
   ],
-  // Force the api-key rate-limit tier from the authenticated session's role so a
-  // caller cannot self-assign a higher limit. `rateLimitMax`/`rateLimitTimeWindow`
-  // /`rateLimitEnabled` are server-only on `/api-key/create` (better-auth rejects
-  // them on client requests), so we cannot rewrite them in the body. Instead we
-  // force `configId` — the one rate-limit-selecting field that IS client-facing —
-  // to the role's tier, overriding any caller-supplied value.
+  // Enforce ONE key per account on better-auth's own create route.
+  //
+  // The tier is no longer decided here. `rateLimitMax` and friends are rejected
+  // outright whenever `ctx.request || ctx.headers` is set, which covers both a
+  // browser hitting `/api/auth/api-key/create` and any server-side call that
+  // forwards the caller's headers — so a hook cannot raise a caller's limit no
+  // matter how it rewrites the body. Tiering lives in `ApiKeyService.create`,
+  // which calls better-auth WITHOUT headers and is therefore allowed to set it.
+  //
+  // A key minted directly through this route still works; it just lands on the
+  // configuration's floor rate limit. That fails safe — the worst a caller can
+  // do by going around our route is give themselves the LOWER limit.
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== '/api-key/create') {
@@ -151,15 +162,7 @@ export const auth = betterAuth({
           message: 'This account already holds an API key. Refresh or revoke it instead.'
         });
       }
-      const isAdmin = authSession?.user.role === 'admin';
-      return {
-        context: {
-          body: {
-            ...ctx.body,
-            configId: isAdmin ? 'admin' : 'default'
-          }
-        }
-      };
+      return;
     }),
     // Send a freshly signed-in caller to the home their role actually has,
     // instead of the single `callbackURL` the UI had to commit to before it

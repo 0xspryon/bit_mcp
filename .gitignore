@@ -41,3 +41,4 @@ dist
 postgres_data
 tei_data
 reranker_data
+/.mcp.json

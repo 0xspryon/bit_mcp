@@ -69,7 +69,12 @@
 		const result = await createKey();
 		if (result.ok) {
 			secret = result.data.key;
-			key = result.data;
+			// The mint response is the secret plus the new key's metadata, but not
+			// a whole `ApiKeyInfo` — it carries no `enabled` or `lastRequest`,
+			// because neither is knowable at the instant of minting. Re-read the
+			// band from the server rather than inventing them, the same way
+			// refresh does.
+			await load();
 		} else {
 			errorMessage = result.error.message || RETRY;
 		}
@@ -101,7 +106,7 @@
 		busy = true;
 		errorMessage = '';
 		confirmRevoke = false;
-		const result = await revokeKey(key.id, key.configId);
+		const result = await revokeKey();
 		if (result.ok) {
 			key = null;
 			secret = null;

@@ -1,5 +1,11 @@
 import { Context, Data, Effect, Layer } from 'effect';
-import { auth } from './auth';
+import {
+  API_KEY_ADMIN_TIER_MAX,
+  API_KEY_RATE_WINDOW_MS,
+  API_KEY_USER_TIER_MAX,
+  auth
+} from './auth';
+import type { Role } from './auth-roles';
 
 /**
  * The api-key metadata the console shows. Mirrors better-auth's `ApiKey` minus
@@ -27,20 +33,32 @@ export type CreatedApiKey = ApiKeyInfo & { key: string };
 /** better-auth refused or failed the operation. */
 export class ApiKeyProviderError extends Data.TaggedError('ApiKeyProviderError')<{
   cause: unknown;
-}> {}
+}> { }
+
+/**
+ * The account already holds a usable key.
+ *
+ * bit's one-key-per-account rule is enforced on better-auth's own
+ * `/api-key/create` route by the before-hook in `auth.ts` — but that hook reads
+ * the session off the request, and `ApiKeyService.create` deliberately calls
+ * better-auth with NO headers so it is allowed to set the tier. No headers
+ * means no session, which means the hook's guard does not fire for us. The
+ * route program owns the invariant instead, and this is how it says so.
+ */
+export class ApiKeyConflictError extends Data.TaggedError('ApiKeyConflictError')<{}> { }
 
 export class ApiKeyService extends Context.Tag('@api/lib/ApiKeyService')<
   ApiKeyService,
   {
     list: (headers: Headers) => Effect.Effect<ReadonlyArray<ApiKeyInfo>, ApiKeyProviderError>;
-    create: (headers: Headers) => Effect.Effect<CreatedApiKey, ApiKeyProviderError>;
-    delete: (
-      headers: Headers,
-      keyId: string,
-      configId?: string | null
-    ) => Effect.Effect<void, ApiKeyProviderError>;
+    /**
+     * Mint a key for `userId`, tiered by `role`. Takes the OWNER rather than the
+     * caller's headers on purpose — see the implementation.
+     */
+    create: (userId: string, role: Role | null) => Effect.Effect<CreatedApiKey, ApiKeyProviderError>;
+    delete: (headers: Headers, keyId: string) => Effect.Effect<void, ApiKeyProviderError>;
   }
->() {}
+>() { }
 
 /** Narrow better-auth's loosely-typed row onto {@link ApiKeyInfo}. */
 const toInfo = (row: Record<string, unknown>): ApiKeyInfo => ({
@@ -67,12 +85,26 @@ export const ApiKeyServiceLive = Layer.succeed(ApiKeyService, {
       },
       catch: (cause) => new ApiKeyProviderError({ cause })
     }),
-  create: (headers) =>
+  create: (userId, role) =>
     Effect.tryPromise({
       try: async () => {
-        // `configId` is forced from the caller's role by the before-hook in
-        // auth.ts, so nothing tier-related is passed (or trusted) from here.
-        const created = await auth.api.createApiKey({ headers, body: { name: 'bit' } });
+        // NO `headers`, and that is the entire point. better-auth treats
+        // `ctx.request || ctx.headers` as a client request and then rejects
+        // `rateLimitMax` with SERVER_ONLY_PROPERTY — forwarding the caller's
+        // headers here would make the tier unsettable. Naming the owner via
+        // `userId` is the server-side path; the route program authenticated
+        // that caller before handing us their id.
+        const created = await auth.api.createApiKey({
+          body: {
+            userId,
+            name: 'bit',
+            // The tier, and the only thing that carries it now that there is a
+            // single configuration. Derived from the role the SERVER resolved,
+            // never from anything the caller sent.
+            rateLimitMax: role === 'admin' ? API_KEY_ADMIN_TIER_MAX : API_KEY_USER_TIER_MAX,
+            rateLimitTimeWindow: API_KEY_RATE_WINDOW_MS
+          }
+        });
         const row = created as unknown as Record<string, unknown>;
         return { ...toInfo(row), key: String(row.key) };
       },
@@ -81,6 +113,9 @@ export const ApiKeyServiceLive = Layer.succeed(ApiKeyService, {
   delete: (headers, keyId) =>
     Effect.tryPromise({
       try: async () => {
+        // No `configId` to pass: one configuration means there is no tier to
+        // name. This retires the "admin-tier key cannot be revoked" bug rather
+        // than patching it — the argument that used to be dropped is gone.
         await auth.api.deleteApiKey({ headers, body: { keyId } });
       },
       catch: (cause) => new ApiKeyProviderError({ cause })

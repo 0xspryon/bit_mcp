@@ -1,11 +1,12 @@
 /**
  * The caller's own API key.
  *
- * Listing, creating and revoking go straight to the better-auth api-key plugin
- * under /api/auth/api-key/*, the same way admin actions go straight to
- * /api/auth/admin/*. Refresh is ours (/api/v1/me/key/refresh) because it has
- * to revoke and mint as one server-side step — see that route's handler for
- * why the ordering matters.
+ * Creating, revoking and refreshing are OURS, under /api/v1/me/key/*. None of
+ * them can go through better-auth's own /api/auth/api-key/* routes: minting
+ * needs the tier applied server-side (a client-side mint silently lands on the
+ * floor limit), revoking and refreshing need the one-key-per-account rule
+ * enforced where it can actually see the caller. Only listing still goes
+ * straight to the plugin, the way admin actions go to /api/auth/admin/*.
  */
 import { apiClient, call, type ApiResult, type ErrorsOf, type UnexpectedError } from './client';
 
@@ -25,7 +26,11 @@ export interface ApiKeyInfo {
 /** A key plus its secret. Only ever returned by create and refresh. */
 export type CreatedApiKey = ApiKeyInfo & { key: string };
 
+const createEndpoint = apiClient.me.key.$post;
+const revokeEndpoint = apiClient.me.key.revoke.$post;
 const refreshEndpoint = apiClient.me.key.refresh.$post;
+export type CreateKeyError = ErrorsOf<typeof createEndpoint>;
+export type RevokeKeyError = ErrorsOf<typeof revokeEndpoint>;
 export type RefreshKeyError = ErrorsOf<typeof refreshEndpoint>;
 
 /** better-auth endpoints answer with a bare JSON body (no `error` envelope);
@@ -79,23 +84,29 @@ export async function fetchCurrentKey(): Promise<ApiResult<ApiKeyInfo | null, Un
 	return { ok: true, data: enabled[0] ?? null };
 }
 
-export async function createKey(): Promise<ApiResult<CreatedApiKey, UnexpectedError>> {
-	// The tier (`configId`) is forced server-side from the caller's role, and
-	// the one-key-per-account rule is enforced by the same hook — so there is
-	// nothing to send but a name.
-	return authPost<CreatedApiKey>('api-key/create', { name: 'bit' });
+/**
+ * Mint the account's key.
+ *
+ * Deliberately NOT better-auth's own `api-key/create`: the per-key rate limit is
+ * a server-only field, rejected on any request carrying headers, so a key minted
+ * straight from the browser lands on the floor tier whatever the account's role.
+ * Ours mints server-side with the tier applied, and answers 409 rather than a
+ * second key if the account already holds one.
+ */
+export async function createKey() {
+	return call(createEndpoint());
 }
 
 /**
- * `configId` is required, not decorative: with it omitted the plugin resolves
- * the `default` configuration and then 404s any key stored under a different
- * one — so an admin-tier key would be impossible to revoke from the UI.
+ * Revoke the account's key.
+ *
+ * Takes no id: bit allows one key per account and the server revokes whatever
+ * the session holds, so there is nothing for the browser to name — and no
+ * chance of it naming someone else's. Answers `{ revoked }` so the UI can tell
+ * "revoked it" from "there was nothing to revoke".
  */
-export async function revokeKey(
-	keyId: string,
-	configId?: string | null
-): Promise<ApiResult<unknown, UnexpectedError>> {
-	return authPost('api-key/delete', { keyId, ...(configId ? { configId } : {}) });
+export async function revokeKey() {
+	return call(revokeEndpoint());
 }
 
 /** Revoke-and-mint in one server-side step. */
@@ -103,12 +114,17 @@ export async function refreshKey() {
 	return call(refreshEndpoint());
 }
 
-/** `default · 20/60s` — the design's TIER cell. */
-export function formatTier(key: Pick<ApiKeyInfo, 'configId' | 'rateLimitMax' | 'rateLimitTimeWindow'>): string {
-	const tier = key.configId ?? 'default';
-	if (key.rateLimitMax === null) return tier;
+/**
+ * `100/60s` — the design's TIER cell.
+ *
+ * Reads the limit off the KEY. It used to print `configId`, which no longer
+ * carries the tier and would now label every key `default` however generous its
+ * allowance actually is.
+ */
+export function formatTier(key: Pick<ApiKeyInfo, 'rateLimitMax' | 'rateLimitTimeWindow'>): string {
+	if (key.rateLimitMax === null) return 'unlimited';
 	const windowSeconds = Math.round((key.rateLimitTimeWindow ?? 60_000) / 1000);
-	return `${tier} · ${key.rateLimitMax}/${windowSeconds}s`;
+	return `${key.rateLimitMax}/${windowSeconds}s`;
 }
 
 /** `6 / 20` — the design's CALLS_60S cell. */

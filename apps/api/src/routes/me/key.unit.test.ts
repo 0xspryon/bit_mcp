@@ -8,9 +8,13 @@ import {
   type CreatedApiKey
 } from '../../lib/api-keys';
 import { makeAuthServiceTest } from '../../lib/effect-auth';
-import { refreshKeyRouteProgram } from './key.handler';
+import {
+  createKeyRouteProgram,
+  refreshKeyRouteProgram,
+  revokeKeyRouteProgram
+} from './key.handler';
 
-const user = (): User => ({
+const user = (role: User['role'] = 'user'): User => ({
   id: 'user-1',
   name: 'nyx_operator',
   email: 'nyx@example.com',
@@ -19,7 +23,7 @@ const user = (): User => ({
   createdAt: new Date('2026-08-01T00:00:00.000Z'),
   updatedAt: new Date('2026-08-01T00:00:00.000Z'),
   isAnonymous: false,
-  role: 'user',
+  role,
   banned: false,
   banReason: null,
   banExpires: null
@@ -74,9 +78,10 @@ const makeLayer = (
     createFails?: boolean;
     deleteFails?: boolean;
     trace?: string[];
+    role?: User['role'];
   } = {}
 ) => {
-  const currentUser = user();
+  const currentUser = user(options.role ?? 'user');
   const currentSession = session();
   const trace = options.trace ?? [];
 
@@ -102,25 +107,120 @@ const makeLayer = (
           trace.push('list');
           return options.existing ?? [keyInfo()];
         }),
-      delete: (_headers, keyId, configId) =>
+      delete: (_headers, keyId) =>
         options.deleteFails
           ? Effect.fail(new ApiKeyProviderError({ cause: 'delete failed' }))
           : Effect.sync(() => {
-              // configId is recorded because omitting it makes better-auth
-              // resolve the DEFAULT configuration and 404 any key stored under
-              // another one — an admin-tier key would be unrevokable.
-              trace.push(`delete:${keyId}:${configId ?? 'none'}`);
+              trace.push(`delete:${keyId}`);
             }),
-      create: () =>
+      // The owner and tier are recorded: with a single api-key configuration
+      // these arguments ARE the tiering mechanism, so what the program hands
+      // over is the contract worth pinning.
+      create: (userId, role) =>
         options.createFails
           ? Effect.fail(new ApiKeyProviderError({ cause: 'create failed' }))
           : Effect.sync(() => {
-              trace.push('create');
+              trace.push(`create:${userId}:${role ?? 'none'}`);
               return created();
             })
     })
   );
 };
+
+
+describe('create key route program', () => {
+  it('mints for an account holding no key, tiered from the stored role', async () => {
+    const trace: string[] = [];
+    const dto = await Effect.runPromise(
+      createKeyRouteProgram(new Headers()).pipe(
+        Effect.provide(makeLayer({ trace, existing: [], role: 'admin' }))
+      )
+    );
+    expect(trace).toEqual(['list', 'create:user-1:admin']);
+    expect(dto.key).toBe(created().key);
+  });
+
+  // The rule better-auth's own hook cannot enforce for us: `ApiKeyService.create`
+  // calls it without headers, so the hook sees no session and never fires.
+  it('refuses a second key rather than minting one', async () => {
+    const trace: string[] = [];
+    const exit = await Effect.runPromiseExit(
+      createKeyRouteProgram(new Headers()).pipe(Effect.provide(makeLayer({ trace })))
+    );
+    expect(getFailure(exit)._tag).toBe('ApiKeyConflictError');
+    // The point of the assertion: it stopped BEFORE minting.
+    expect(trace).toEqual(['list']);
+  });
+
+  it('treats a disabled key as no key at all', async () => {
+    const trace: string[] = [];
+    await Effect.runPromise(
+      createKeyRouteProgram(new Headers()).pipe(
+        Effect.provide(makeLayer({ trace, existing: [keyInfo({ enabled: false })] }))
+      )
+    );
+    expect(trace).toEqual(['list', 'create:user-1:user']);
+  });
+
+  it('fails with UnauthorizedError when there is no session', async () => {
+    const exit = await Effect.runPromiseExit(
+      createKeyRouteProgram(new Headers()).pipe(Effect.provide(makeLayer({ hasSession: false })))
+    );
+    expect(getFailure(exit)._tag).toBe('UnauthorizedError');
+  });
+});
+
+describe('revoke key route program', () => {
+  const revoke = (existing: ApiKeyInfo[], trace: string[]) =>
+    Effect.runPromise(
+      revokeKeyRouteProgram(new Headers()).pipe(Effect.provide(makeLayer({ trace, existing })))
+    );
+
+  it('revokes every enabled key and reports how many', async () => {
+    const trace: string[] = [];
+    const result = await revoke([keyInfo({ id: 'k1' }), keyInfo({ id: 'k2' })], trace);
+    expect(trace).toEqual(['list', 'delete:k1', 'delete:k2']);
+    expect(result).toEqual({ revoked: 2 });
+  });
+
+  // A disabled key authenticates nothing, so deleting it would be work the
+  // owner did not ask for — and would make the returned count a lie.
+  it('leaves a disabled key alone and counts only what it revoked', async () => {
+    const trace: string[] = [];
+    const result = await revoke([keyInfo({ id: 'k1' }), keyInfo({ id: 'k2', enabled: false })], trace);
+    expect(trace).toEqual(['list', 'delete:k1']);
+    expect(result).toEqual({ revoked: 1 });
+  });
+
+  it('reports zero rather than failing when there is nothing to revoke', async () => {
+    const trace: string[] = [];
+    expect(await revoke([], trace)).toEqual({ revoked: 0 });
+    expect(trace).toEqual(['list']);
+  });
+
+  // The whole point of splitting revoke out of refresh: it must NOT mint.
+  it('never mints a replacement', async () => {
+    const trace: string[] = [];
+    await revoke([keyInfo({ id: 'k1' })], trace);
+    expect(trace.some((step) => step.startsWith('create'))).toBe(false);
+  });
+
+  it('surfaces a provider failure from the delete', async () => {
+    const exit = await Effect.runPromiseExit(
+      revokeKeyRouteProgram(new Headers()).pipe(
+        Effect.provide(makeLayer({ deleteFails: true }))
+      )
+    );
+    expect(getFailure(exit)._tag).toBe('ApiKeyProviderError');
+  });
+
+  it('fails with UnauthorizedError when there is no session', async () => {
+    const exit = await Effect.runPromiseExit(
+      revokeKeyRouteProgram(new Headers()).pipe(Effect.provide(makeLayer({ hasSession: false })))
+    );
+    expect(getFailure(exit)._tag).toBe('UnauthorizedError');
+  });
+});
 
 describe('refresh key route program', () => {
   it('returns the new secret exactly once, with its metadata', async () => {
@@ -145,7 +245,7 @@ describe('refresh key route program', () => {
     await Effect.runPromise(
       refreshKeyRouteProgram(new Headers()).pipe(Effect.provide(makeLayer({ trace })))
     );
-    expect(trace).toEqual(['list', 'delete:key-old:default', 'create']);
+    expect(trace).toEqual(['list', 'delete:key-old', 'create:user-1:user']);
   });
 
   it('revokes every enabled key, not just the first', async () => {
@@ -157,13 +257,14 @@ describe('refresh key route program', () => {
         )
       )
     );
-    expect(trace).toEqual(['list', 'delete:k1:default', 'delete:k2:default', 'create']);
+    expect(trace).toEqual(['list', 'delete:k1', 'delete:k2', 'create:user-1:user']);
   });
 
-  // Regression: an admin's key is stored with configId 'admin'. Deleting it
-  // under the default configuration 404s, which would leave the highest
-  // -privilege credential in the system impossible to rotate or revoke.
-  it('deletes an admin-tier key under its own configuration', async () => {
+  // Replaces an older regression about deleting `configId: 'admin'` keys. That
+  // whole class of failure came from tiering by configuration, and collapsing
+  // to one configuration retired it: a key minted under the previous scheme is
+  // revoked by id like any other, with no tier to name.
+  it('revokes a legacy admin-tier key with no configuration to name', async () => {
     const trace: string[] = [];
     await Effect.runPromise(
       refreshKeyRouteProgram(new Headers()).pipe(
@@ -172,7 +273,20 @@ describe('refresh key route program', () => {
         )
       )
     );
-    expect(trace).toEqual(['list', 'delete:k-admin:admin', 'create']);
+    expect(trace).toEqual(['list', 'delete:k-admin', 'create:user-1:user']);
+  });
+
+  // The tier now rides on the key itself, so the role handed to `create` is the
+  // whole mechanism. It must come from the user row the server loaded — a
+  // caller who could influence it would be setting their own rate limit.
+  it('mints an admin a key tiered from their stored role', async () => {
+    const trace: string[] = [];
+    await Effect.runPromise(
+      refreshKeyRouteProgram(new Headers()).pipe(
+        Effect.provide(makeLayer({ trace, existing: [], role: 'admin' }))
+      )
+    );
+    expect(trace).toEqual(['list', 'create:user-1:admin']);
   });
 
   it('leaves an already-disabled key alone', async () => {
@@ -184,7 +298,7 @@ describe('refresh key route program', () => {
         )
       )
     );
-    expect(trace).toEqual(['list', 'create']);
+    expect(trace).toEqual(['list', 'create:user-1:user']);
   });
 
   // Refreshing with nothing to refresh is the caller's intent either way —
@@ -196,7 +310,7 @@ describe('refresh key route program', () => {
         Effect.provide(makeLayer({ trace, existing: [] }))
       )
     );
-    expect(trace).toEqual(['list', 'create']);
+    expect(trace).toEqual(['list', 'create:user-1:user']);
     expect(result.key).toBe('bit_sk_7f2c91ae4d0b38e5aa61c7d4f09b2e83');
   });
 
